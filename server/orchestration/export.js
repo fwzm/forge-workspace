@@ -71,14 +71,17 @@ function readTree(dir) {
 }
 
 // Compare the agent's tree against the original snapshot.
-// Returns { modified: {path: content}, added: {path: content},
-//           deleted: [path], empty: bool }
+// Paths whose first segment starts with a dot are dropped as agent-tooling
+// noise (.git, .mimosa, .claude, …) — repository paths can never start with
+// a dot anyway, and machine hooks may write metadata into the work dir.
 function collectChanges(dir, snapshotFiles) {
+  const ignore = (p) => p.split('/')[0].startsWith('.');
   const now = readTree(dir);
   const modified = {};
   const added = {};
   const deleted = [];
   for (const [p, content] of Object.entries(now)) {
+    if (ignore(p)) continue;
     if (Object.prototype.hasOwnProperty.call(snapshotFiles, p)) {
       if (snapshotFiles[p] !== content) modified[p] = content;
     } else {
@@ -86,6 +89,7 @@ function collectChanges(dir, snapshotFiles) {
     }
   }
   for (const p of Object.keys(snapshotFiles)) {
+    if (ignore(p)) continue;
     if (!Object.prototype.hasOwnProperty.call(now, p)) deleted.push(p);
   }
   const count = Object.keys(modified).length + Object.keys(added).length + deleted.length;

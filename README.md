@@ -19,9 +19,10 @@ issue ─▶ 外部实现者（codex/claude）─▶ 内部 QA + 安全引擎
 - **补丁模式** —— agent 永远不直接碰你的真实文件或虚拟仓库。整个工作区被导出到隔离的临时目录（`%TEMP%\forge-<agent>-…`）；FORGE 对结果做 diff 回收，只把该变更集应用回去，再由 CI 引擎做唯一仲裁。
 - **人工合并门** —— 流水线停在「PR 已批准 + CI 全绿」，直到你点击合并（可在设置中开启 `autoMergeExternal` 跳过；不建议）。
 - **熔断器** —— 外部 agent 连续失败 3 次会自动关闭调度器并写入审计记录，而不是无限循环。
+- **工具噪音过滤** —— 变更集收集忽略点前缀目录（`.git`、`.mimosa`、`.claude`……），跟随 agent 会话的机器钩子无法把元数据混进提交。
 - agent 空产出直接判任务失败（不允许静默空转），每一步都进入审计日志。
 
-内置 **Codex CLI**（`codex exec`，stdin 注入提示词）与 **Claude Code**（`claude -p --permission-mode acceptEdits`）适配器，均可在 设置 → *外部智能体 中探测。新增其他 CLI 只需在 `server/orchestration/adapters.js` 里加一个对象。
+内置 **Codex CLI**（`codex exec`，stdin 提示词）、**Claude Code**（`claude -p --permission-mode acceptEdits`）、**ZCode**（无头 `zcode.cjs --prompt --cwd`，标准安装路径自动发现或 `FORGE_ZCODE_CJS` 指定）与 **DeepSeek Harness**（其官方自动化 **ACP** 服务器，`dsh --profile acp`，stdio 上的 JSON-RPC + 权限自动放行；`FORGE_DSH_BIN` 覆盖）适配器，均可在 设置 → *外部智能体 中探测。新增其他 CLI 只需在 `server/orchestration/adapters.js` 里加一个对象。
 
 ## 运行 — Windows 桌面应用
 
@@ -46,7 +47,7 @@ node server/index.js          # http://127.0.0.1:7788（环境变量：FORGE_POR
 npm test                      # 或：node test/run-all.js
 ```
 
-273 条自动化测试（运行后见 `test-report.json`）：状态机、任务 DAG、调度器、仓库、diff、三路合并、PR 门禁、CI 流水线、权限、审计、持久化、终端、演示场景、HTTP API、i18n 字典完整性（en/zh-CN 键位对齐、占位符对齐、孤儿键/引用扫描），以及 Windows 桌面启动器（端口选取、launch-info 握手、图标格式、启动脚本接线、无头启动）。编排套件使用可注入的 fake 适配器跑通完整流水线——实现 → 门禁 → 评审 → CI → 人工/自动合并、要求修改门控、熔断器、空产出拒绝与沙箱路径禁闭——因此编排逻辑的验证不花 token；真实 CLI 另行冒烟验证。
+280 条自动化测试（运行后见 `test-report.json`）：状态机、任务 DAG、调度器、仓库、diff、三路合并、PR 门禁、CI 流水线、权限、审计、持久化、终端、演示场景、HTTP API、i18n 字典完整性（en/zh-CN 键位对齐、占位符对齐、孤儿键/引用扫描），以及 Windows 桌面启动器（端口选取、launch-info 握手、图标格式、启动脚本接线、无头启动）。编排套件使用可注入的 fake 适配器跑通完整流水线——实现 → 门禁 → 评审 → CI → 人工/自动合并、要求修改门控、熔断器、空产出拒绝与沙箱路径禁闭——外加基于 fixture 的 ACP 客户端套件（握手、会话周期、权限自动放行、在飞请求退出拒绝），因此编排逻辑的验证不花 token；真实 CLI 另行冒烟验证。
 
 ## 架构
 
@@ -97,4 +98,4 @@ npm test                      # 或：node test/run-all.js
 - 演示场景通过真实 API 逐步编排，但步骤序列本身是固定的（这是演示，不是自主 planner）。
 - 服务端字符串（API 错误消息、终端命令输出、演示步骤名）仅英文；i18n 层覆盖 Web 界面。语言是客户端偏好，不属于持久化的工作台状态。
 - 桌面应用是基于本地服务器的应用模式浏览器窗口（非 Electron 式打包），因此需要 PATH 上有 Node.js；仅支持 Windows（VBS 启动器）。单文件 exe 打包超出范围。
-- 外部编排器失败后需人工点重试（不自动重试，防止烧 token）；dsh/zcode 适配器未内置。
+- 外部编排器失败后需人工点重试（不自动重试，防止烧 token）；dsh 适配器经官方 ACP 自动化协议接入（需 dsh 已登录 DeepSeek），zcode 经无头 CLI 接入（依赖本地安装）。

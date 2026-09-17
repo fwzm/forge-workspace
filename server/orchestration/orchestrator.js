@@ -52,6 +52,7 @@ async function externalImplement(ws, agent, task) {
     const result = await adapter.runTask({
       workDir,
       prompt: fs.readFileSync(`${workDir}/TASK.md`, 'utf8'),
+      kind: 'implement',
       task,
       ws,
     });
@@ -124,6 +125,7 @@ async function externalReview(ws, agent, task) {
     const result = await adapter.runTask({
       workDir,
       prompt: fs.readFileSync(`${workDir}/PR.md`, 'utf8'),
+      kind: 'review',
       task,
       ws,
     });

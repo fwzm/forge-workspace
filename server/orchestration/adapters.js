@@ -15,9 +15,22 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { createAcpClient, autoAllowPermission } = require('./acp-client');
 
 const RUN_TIMEOUT_MS = 15 * 60 * 1000; // 15 min per agent run
 const OUTPUT_LIMIT = 512 * 1024;
+
+// First existing candidate path, or null. Candidates may come from an env
+// override, PATH-resolved shims, or well-known install locations.
+function firstExisting(paths) {
+  for (const p of paths) {
+    if (!p) continue;
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+    } catch (_) { /* skip */ }
+  }
+  return null;
+}
 
 function run(bin, constArgs, opts, stdinText) {
   return new Promise((resolve) => {
@@ -51,6 +64,10 @@ function run(bin, constArgs, opts, stdinText) {
     if (stdinText !== undefined && stdinText !== null) {
       child.stdin.on('error', () => { /* agent may close stdin early */ });
       child.stdin.write(String(stdinText), 'utf8');
+      child.stdin.end();
+    } else {
+      // Agents that read stdin would block forever on an open pipe; always
+      // close it when there is nothing to feed.
       child.stdin.end();
     }
   });
@@ -129,6 +146,141 @@ const claudeAdapter = {
 };
 
 // ---------------------------------------------------------------------------
+// ZCode: Electron app with a headless CLI entry (resources/glm/zcode.cjs).
+// The task brief travels via TASK.md in the isolated work dir; argv carries
+// only a constant instruction plus the work dir path.
+// ---------------------------------------------------------------------------
+const ZCODE_CONST_PROMPT = 'Read TASK.md in the current directory and complete the task it describes. Stay within this directory.';
+const ZCODE_CONST_REVIEW_PROMPT = 'Read PR.md in the current directory and reply with exactly the JSON object it requests. Output only the JSON object.';
+
+function resolveZcodeCjs() {
+  return firstExisting([
+    process.env.FORGE_ZCODE_CJS,
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'ZCode', 'resources', 'glm', 'zcode.cjs'),
+    path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'ZCode', 'resources', 'glm', 'zcode.cjs'),
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'ZCode', 'resources', 'glm', 'zcode.cjs'),
+    'D:\\Program Files\\ZCode\\resources\\glm\\zcode.cjs',
+    'E:\\Program Files\\ZCode\\resources\\glm\\zcode.cjs',
+  ]);
+}
+
+const zcodeAdapter = {
+  id: 'zcode',
+  label: 'ZCode (headless)',
+  kind: 'real',
+  probe: async () => {
+    const cjs = resolveZcodeCjs();
+    if (!cjs) return { ok: false, reason: 'zcode.cjs not found (set FORGE_ZCODE_CJS)' };
+    const res = await run(process.execPath, [cjs, '--version'], { cwd: os.tmpdir() });
+    return { ok: res.ok, version: (res.stdout || '').trim(), bin: cjs };
+  },
+  runTask: async (ctx) => {
+    const cjs = resolveZcodeCjs();
+    if (!cjs) throw new Error('zcode unavailable: zcode.cjs not found (set FORGE_ZCODE_CJS)');
+    const constPrompt = ctx.kind === 'review' ? ZCODE_CONST_REVIEW_PROMPT : ZCODE_CONST_PROMPT;
+    return run(process.execPath, [cjs, '--prompt', constPrompt, '--cwd', ctx.workDir], { cwd: ctx.workDir });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// DeepSeek Harness (dsh): driven through its automation-only ACP server
+// (`dsh --profile acp`, JSON-RPC over stdio). The dsh.cmd shim resolves the
+// install dir; we launch node against its bin.js directly.
+// ---------------------------------------------------------------------------
+function resolveDshBinJs() {
+  const envBin = process.env.FORGE_DSH_BIN;
+  if (envBin && fs.existsSync(envBin)) return envBin;
+  const shim = resolveBin('dsh');
+  if (shim) {
+    const derived = path.join(path.dirname(shim), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+    if (fs.existsSync(derived)) return derived;
+  }
+  return null;
+}
+
+function collectAssistantText(updates, sessionId) {
+  let text = '';
+  for (const msg of updates) {
+    if (msg.method !== 'session/update') continue;
+    const u = msg.params && msg.params.update;
+    if (!u || (msg.params.sessionId && sessionId && msg.params.sessionId !== sessionId)) continue;
+    if (u.kind === 'agent_message_chunk' && u.content && u.content.type === 'text') {
+      text += u.content.text || '';
+    } else if (u.sessionUpdate === 'agent_message_chunk' && u.content && u.content.type === 'text') {
+      text += u.content.text || '';
+    }
+  }
+  return text;
+}
+
+const dshAdapter = {
+  id: 'dsh',
+  label: 'DeepSeek Harness (ACP)',
+  kind: 'real',
+  probe: async () => {
+    const binJs = resolveDshBinJs();
+    if (!binJs) return { ok: false, reason: 'dsh not found (set FORGE_DSH_BIN)' };
+    const client = createAcpClient({
+      bin: process.execPath,
+      args: [binJs, '--profile', 'acp'],
+      timeoutMs: 60 * 1000,
+    });
+    try {
+      const result = await client.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+      return { ok: true, version: result && result.agentInfo ? `${result.agentInfo.name} ${result.agentInfo.version}` : 'acp', bin: binJs };
+    } catch (e) {
+      return { ok: false, reason: e.message };
+    } finally {
+      client.close();
+    }
+  },
+  runTask: async (ctx) => {
+    const binJs = resolveDshBinJs();
+    if (!binJs) throw new Error('dsh unavailable: bin.js not found (set FORGE_DSH_BIN)');
+    const client = createAcpClient({
+      bin: process.execPath,
+      args: [binJs, '--profile', 'acp'],
+      timeoutMs: RUN_TIMEOUT_MS,
+    });
+    const updates = [];
+    client.onNotification((msg) => {
+      if (msg.method === 'session/request_permission') autoAllowPermission(msg, client.reply);
+      else updates.push(msg);
+    });
+    try {
+      await client.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+      const session = await client.request('session/new', { cwd: ctx.workDir, mcpServers: [] });
+      const sessionId = session && session.sessionId;
+      if (!sessionId) throw new Error('dsh ACP session/new returned no sessionId');
+      await client.request('session/prompt', {
+        sessionId,
+        prompt: [{ type: 'text', text: ctx.prompt }],
+      });
+      const transcript = collectAssistantText(updates, sessionId);
+      return {
+        ok: true,
+        exitCode: 0,
+        timedOut: false,
+        stdout: transcript.slice(0, OUTPUT_LIMIT) || `[dsh] turn settled (session ${sessionId})`,
+        stderr: '',
+        error: null,
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        exitCode: 1,
+        timedOut: e.code === 'E_ACP_TIMEOUT',
+        stdout: collectAssistantText(updates, null).slice(0, OUTPUT_LIMIT),
+        stderr: e.message,
+        error: e.message,
+      };
+    } finally {
+      client.close();
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 const registry = new Map();
@@ -178,6 +330,8 @@ function registerFakeAdapter(id, handler) {
 
 registerAdapter(codexAdapter);
 registerAdapter(claudeAdapter);
+registerAdapter(zcodeAdapter);
+registerAdapter(dshAdapter);
 
 // ---------------------------------------------------------------------------
 // Prompt builders (pure, unit-testable)
@@ -242,6 +396,11 @@ function parseReviewReply(text) {
   return null;
 }
 
+// ctx.kind lets const-prompt adapters distinguish implement vs review runs.
+function withKind(kind, ctx) {
+  return Object.assign({}, ctx, { kind });
+}
+
 module.exports = {
   registerAdapter,
   registerFakeAdapter,
@@ -251,5 +410,8 @@ module.exports = {
   buildReviewPrompt,
   parseReviewReply,
   resolveBin,
+  resolveZcodeCjs,
+  resolveDshBinJs,
+  withKind,
   RUN_TIMEOUT_MS,
 };

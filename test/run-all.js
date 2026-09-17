@@ -30,6 +30,7 @@ use('./api.test.js');
 use('./i18n.test.js');
 use('./desktop.test.js');
 use('./orchestration.test.js');
+use('./acp.test.js');
 
 (async () => {
   const results = [];

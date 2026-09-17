@@ -30,13 +30,20 @@ Safety model:
   recommended).
 - **Circuit breaker** — three consecutive external failures disable the
   auto-scheduler and write an audit entry instead of looping forever.
+- **Tooling-noise filter** — changeset collection ignores dot-prefixed
+  directories (`.git`, `.mimosa`, `.claude`, …), so machine hooks that follow
+  agent sessions cannot leak metadata into commits.
 - Empty agent output fails the task (no silent no-ops), and every step lands
   in the audit log.
 
-Adapters ship for **Codex CLI** (`codex exec`, stdin prompt) and
-**Claude Code** (`claude -p --permission-mode acceptEdits`, stdin prompt);
-both are probed via Settings → *External agents*. Adding another CLI is one
-object in `server/orchestration/adapters.js`.
+Adapters ship for **Codex CLI** (`codex exec`, stdin prompt), **Claude Code**
+(`claude -p --permission-mode acceptEdits`), **ZCode** (headless
+`zcode.cjs --prompt --cwd`, found via the standard install path or
+`FORGE_ZCODE_CJS`) and **DeepSeek Harness** (its official automation-only
+**ACP** server, `dsh --profile acp`, JSON-RPC over stdio with
+permission auto-allow; override with `FORGE_DSH_BIN`). All are probed via
+Settings → *External agents*. Adding another CLI is one object in
+`server/orchestration/adapters.js`.
 
 ## Run — Windows desktop app
 
@@ -67,7 +74,7 @@ scan → fix → reviewer request-changes → fix → CI green → approve → m
 npm test                      # or: node test/run-all.js
 ```
 
-273 automated tests (see `test-report.json` after a run): state machine, task DAG,
+280 automated tests (see `test-report.json` after a run): state machine, task DAG,
 scheduler, repository, diff, 3-way merge, PR gate, CI pipeline, permissions,
 audit, persistence, terminal, demo scenario, HTTP API, i18n dictionary
 integrity (en/zh-CN key parity, placeholder parity, orphan/reference scan),
@@ -75,7 +82,9 @@ and the Windows desktop launcher (port picking, launch-info handshake, icon
 format, launcher-script wiring, headless boot). The orchestration suite runs
 the full pipeline against injectable fake adapters — implement → gates →
 review → CI → human/auto merge, request-changes gating, the circuit breaker,
-empty-output rejection and sandbox path-confinement — so the orchestration
+empty-output rejection and sandbox path-confinement — plus a fixture-based
+ACP client suite (handshake, session cycle, permission auto-allow, in-flight
+exit rejection) — so the orchestration
 logic is verified without spending tokens; real-CLI runs are smoke-tested
 separately.
 
@@ -169,4 +178,6 @@ browser (vanilla ES modules)          server (Node http, zero deps)
   Electron-style bundling), so it needs Node.js on PATH; it is Windows-only
   (VBS launcher). A packaged single-exe build is out of scope.
 - External orchestrator failures need a manual Retry (no auto-retry, to avoid
-  burning tokens); no dsh/zcode adapters ship.
+  burning tokens); the dsh adapter rides dsh's official automation ACP
+  protocol (dsh must be signed in to DeepSeek), the zcode adapter rides its
+  headless CLI (local install required).
