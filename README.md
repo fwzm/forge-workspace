@@ -1,170 +1,100 @@
-# FORGE — Autonomous Software Engineering Workspace
+[English](README.en.md) | **简体中文**
 
-A local, zero-dependency multi-agent software engineering workbench simulator.
-Node.js backend + vanilla HTML/CSS/JS frontend (no frameworks, no npm packages).
-Runs as a **Windows desktop app** (Edge/Chrome app-mode window) or a plain
-local web server — and can **orchestrate real agent CLIs** (Codex, Claude Code)
-in fully automated pipelines with a human merge gate.
+# FORGE — 自主软件工程工作台
 
-## Real-agent orchestration (patch mode)
+本地零依赖的多 Agent 软件工程工作台模拟器：Node.js 后端 + 原生 HTML/CSS/JS 前端（无框架、无任何 npm 依赖）。可作为 **Windows 桌面应用**（Edge/Chrome 应用模式窗口）或普通本地 Web 服务器运行——并且能够**编排真实 agent CLI**（Codex、Claude Code）执行全自动流水线，仅在合并处保留人工门。
 
-The orchestrator drives your installed agent CLIs through the same task DAG
-the simulated agents use:
+## 真实 Agent 编排（补丁模式）
+
+编排器通过模拟 Agent 所使用的同一套任务 DAG 驱动你已安装的 agent CLI：
 
 ```
-issue ─▶ external implementer (codex/claude) ─▶ internal QA + security engines
-      ─▶ external reviewer ─▶ CI (lint/unit/integration/security/build)
-      ─▶ PR (approved + green) ─▶ ⏸ human merge gate (default) or auto-merge
+issue ─▶ 外部实现者（codex/claude）─▶ 内部 QA + 安全引擎
+      ─▶ 外部评审 ─▶ CI（lint/unit/integration/security/build）
+      ─▶ PR（已批准 + 全绿）─▶ ⏸ 人工合并门（默认）或自动合并
 ```
 
-Safety model:
+安全模型：
 
-- **Patch mode** — the agent never touches your real files or the virtual
-  repository directly. Its whole workspace is exported to an isolated temp
-  directory (`%TEMP%\forge-<agent>-…`); FORGE diffs the result back and
-  applies only that changeset, then runs the CI engines as the arbiter.
-- **Human merge gate** — pipelines park at "PR approved + CI green" until you
-  click Merge (enable `autoMergeExternal` in Settings to skip; not
-  recommended).
-- **Circuit breaker** — three consecutive external failures disable the
-  auto-scheduler and write an audit entry instead of looping forever.
-- Empty agent output fails the task (no silent no-ops), and every step lands
-  in the audit log.
+- **补丁模式** —— agent 永远不直接碰你的真实文件或虚拟仓库。整个工作区被导出到隔离的临时目录（`%TEMP%\forge-<agent>-…`）；FORGE 对结果做 diff 回收，只把该变更集应用回去，再由 CI 引擎做唯一仲裁。
+- **人工合并门** —— 流水线停在「PR 已批准 + CI 全绿」，直到你点击合并（可在设置中开启 `autoMergeExternal` 跳过；不建议）。
+- **熔断器** —— 外部 agent 连续失败 3 次会自动关闭调度器并写入审计记录，而不是无限循环。
+- agent 空产出直接判任务失败（不允许静默空转），每一步都进入审计日志。
 
-Adapters ship for **Codex CLI** (`codex exec`, stdin prompt) and
-**Claude Code** (`claude -p --permission-mode acceptEdits`, stdin prompt);
-both are probed via Settings → *External agents*. Adding another CLI is one
-object in `server/orchestration/adapters.js`.
+内置 **Codex CLI**（`codex exec`，stdin 注入提示词）与 **Claude Code**（`claude -p --permission-mode acceptEdits`）适配器，均可在 设置 → *外部智能体 中探测。新增其他 CLI 只需在 `server/orchestration/adapters.js` 里加一个对象。
 
-## Run — Windows desktop app
+## 运行 — Windows 桌面应用
 
-Double-click **`desktop\Start-FORGE.vbs`** (or a shortcut created by
-`desktop\Install-Shortcut.ps1`). It starts the workspace server under
-`%LOCALAPPDATA%\FORGE`, opens a chromeless app window, and shuts everything
-down when you close that window. Requires Node.js on PATH and Microsoft Edge
-(preinstalled on Windows 10/11) or Google Chrome.
+双击 **`desktop\Start-FORGE.vbs`**（或运行 `desktop\Install-Shortcut.ps1` 创建的桌面快捷方式）。它会在 `%LOCALAPPDATA%\FORGE` 下启动工作台服务器、打开一个无浏览器外壳的应用窗口，并在你关闭该窗口时自动清理。需要 PATH 上有 Node.js 以及 Microsoft Edge（Windows 10/11 预装）或 Google Chrome。
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File desktop\Install-Shortcut.ps1   # desktop shortcut with icon
-node desktop\make-icon.js                                                          # regenerate desktop\forge.ico
+powershell -NoProfile -ExecutionPolicy Bypass -File desktop\Install-Shortcut.ps1   # 创建带图标的桌面快捷方式
+node desktop\make-icon.js                                                          # 重新生成 desktop\forge.ico
 ```
 
-## Run — local web server
+## 运行 — 本地 Web 服务器
 
 ```bash
-node server/index.js          # http://127.0.0.1:7788  (env: FORGE_PORT, FORGE_DATA_DIR)
+node server/index.js          # http://127.0.0.1:7788（环境变量：FORGE_PORT、FORGE_DATA_DIR）
 ```
 
-Open the UI, click **Reset & seed demo**, then **Run all steps** to watch the full
-scenario: issue → planner DAG → buggy implementation → failing QA → failing security
-scan → fix → reviewer request-changes → fix → CI green → approve → merge.
+打开界面后点击 **重置并种子演示**，再点 **执行全部步骤**，即可观看完整场景：issue → planner 拆 DAG → 带缺陷的实现 → QA 失败 → 安全扫描失败 → 修复 → 评审要求修改 → 再修复 → CI 全绿 → 批准 → 合并。
 
-## Test
+## 测试
 
 ```bash
-npm test                      # or: node test/run-all.js
+npm test                      # 或：node test/run-all.js
 ```
 
-273 automated tests (see `test-report.json` after a run): state machine, task DAG,
-scheduler, repository, diff, 3-way merge, PR gate, CI pipeline, permissions,
-audit, persistence, terminal, demo scenario, HTTP API, i18n dictionary
-integrity (en/zh-CN key parity, placeholder parity, orphan/reference scan),
-and the Windows desktop launcher (port picking, launch-info handshake, icon
-format, launcher-script wiring, headless boot). The orchestration suite runs
-the full pipeline against injectable fake adapters — implement → gates →
-review → CI → human/auto merge, request-changes gating, the circuit breaker,
-empty-output rejection and sandbox path-confinement — so the orchestration
-logic is verified without spending tokens; real-CLI runs are smoke-tested
-separately.
+273 条自动化测试（运行后见 `test-report.json`）：状态机、任务 DAG、调度器、仓库、diff、三路合并、PR 门禁、CI 流水线、权限、审计、持久化、终端、演示场景、HTTP API、i18n 字典完整性（en/zh-CN 键位对齐、占位符对齐、孤儿键/引用扫描），以及 Windows 桌面启动器（端口选取、launch-info 握手、图标格式、启动脚本接线、无头启动）。编排套件使用可注入的 fake 适配器跑通完整流水线——实现 → 门禁 → 评审 → CI → 人工/自动合并、要求修改门控、熔断器、空产出拒绝与沙箱路径禁闭——因此编排逻辑的验证不花 token；真实 CLI 另行冒烟验证。
 
-## Architecture
+## 架构
 
 ```
-browser (vanilla ES modules)          server (Node http, zero deps)
+浏览器（原生 ES Modules）              服务端（Node http，零依赖）
 ┌─────────────────────────┐           ┌────────────────────────────────────┐
-│ main.js  router+keys    │  fetch    │ index.js ─ main.js                 │
-│ store.js polling state  │ ────────► │ routes-core/repo/collab + jsonio   │
-│ views/* 11 views        │ ◄──────── │ static.js (UI assets)              │
-│ actions.js guards       │  JSON     │ terminal.js (shell)                │
-└─────────────────────────┘           │ domain/                            │
-                                      │  workspace.js  facade+permissions  │
-                                      │  tasks.js      DAG + FSM + sched   │
-                                      │  repo.js       blobs/trees/commits │
-                                      │  merge.js      diff3 3-way merge   │
-                                      │  pr.js ci.js   gate: checks+approve│
-                                      │  agents.js     registry+protocol   │
-                                      │  audit.js persistence.js           │
-                                      │ agents/runners.js  real agent work │
-                                      │ engines/ harness(vm) lint security │
-                                      │          build review              │
-                                      │ demo/  seed + 15-step scenario     │
+│ main.js  路由+快捷键     │  fetch    │ index.js ─ main.js                 │
+│ store.js 轮询状态        │ ────────► │ routes-core/repo/collab + jsonio   │
+│ views/*  11 个视图       │ ◄──────── │ static.js（静态资源）               │
+│ actions.js 操作守卫      │  JSON     │ terminal.js（工作区 shell）         │
+│ i18n.js  中英切换        │           │ domain/ workspace 门面+权限+审计    │
+└─────────────────────────┘           │  tasks(DAG+FSM+调度) repo(blob/tree │
+                                      │  /commit) merge(diff3) pr ci agents│
+                                      │ agents/runners.js 内置执行器        │
+                                      │ engines/ harness(vm沙箱) lint       │
+                                      │  security build review             │
+                                      │ orchestration/ 真实 CLI 编排器      │
+                                      │  export(隔离快照) adapters(codex/   │
+                                      │  claude) orchestrator(流水线+门)    │
+                                      │ demo/ 种子 + 15 步场景              │
                                       └────────────────────────────────────┘
 ```
 
-- **Unified message protocol**: every agent action posts `{id, agent, timestamp, task,
-  status, input, output, artifacts, dependencies}`.
-- **Task FSM**: `blocked → ready → running → completed|failed|paused → …`;
-  `failed --retry--> ready`; cancel from every non-terminal state. Illegal
-  transitions throw `FORGE_INVALID_TRANSITION` with the explicit pair.
-- **Scheduler**: dependency satisfaction promotes `blocked → ready`; container
-  tasks (split parents) auto-complete when all children complete; optional
-  auto-scheduler assigns and executes ready tasks.
-- **Repository**: content-addressed blobs (SHA-256), flat trees, hash-chained
-  commits (tree+parents+message+author+timestamp), branches as refs, working
-  tree with dirty tracking, diff3 merge with conflict markers and
-  ours/theirs/manual resolution.
-- **PR gate**: merge requires the configured required checks green on the head
-  SHA (latest run) **and** ≥1 approval scoped to that head; conflicts surface
-  as `FORGE_CONFLICT` and are resolved on the target branch.
-- **CI**: lint / unit / integration / security / build execute real engines over
-  a real snapshot; repo tests run in a locked-down `vm` sandbox with a mini
-  describe/it/assert harness and repo-relative require (no fs/process access).
-- **Permissions**: role × action matrix (admin/planner/implementer/reviewer/
-  qa/security/viewer/system) enforced at the workspace facade; toggleable,
-  always audited.
-- **Persistence**: every mutation serializes the whole workspace atomically
-  (tmp+rename) to `data/workspace.json`; import/export uses the same envelope
-  (`format: "forge.workspace", version: 1`).
-- **Audit**: append-only log of every significant state change with actor,
-  from/to details (capped at 5000 entries).
-- **Multi-language UI (i18n)**: English / 简体中文, switchable from the
-  sidebar quick-switch or Settings; preference persists in `localStorage`
-  (browser language is auto-detected on first visit). All chrome, statuses,
-  severities and toasts are localized through a single dictionary
-  (`public/js/i18n/messages.json`) with `{param}` interpolation.
+- **统一消息协议**：每个 agent 动作都投递 `{id, agent, timestamp, task, status, input, output, artifacts, dependencies}`。
+- **任务状态机**：`blocked → ready → running → completed|failed|paused → …`；`failed --retry--> ready`；非终态可取消。非法转换抛出 `FORGE_INVALID_TRANSITION` 并指明具体转换对。
+- **调度器**：依赖满足时 `blocked → ready`；容器任务（拆分父任务）在全部子任务完成后自动完成；可选自动调度器领取并执行就绪任务。
+- **虚拟仓库**：内容寻址 blob（SHA-256）、扁平树、哈希链提交（tree+parents+message+author+timestamp）、分支引用、带脏检测的工作树、diff3 三路合并（冲突标记 + ours/theirs/手动解决）。
+- **PR 门禁**：合并要求 head SHA 上最新 CI run 的全部必要检查通过**且**至少一个绑定该 head 的批准；新提交后旧批准失效；冲突以 `FORGE_CONFLICT` 呈现并在目标分支上解决。
+- **CI**：lint / unit / integration / security / build 每个阶段都是跑在真实快照上的真实引擎；仓库测试在锁定权限的 `vm` 沙箱中执行（迷你 describe/it/assert + 仓库相对 require，无法访问 fs/process）。
+- **权限**：角色 × 动作矩阵（admin/planner/implementer/reviewer/qa/security/viewer/system）在工作台门面处强制执行；可开关，始终记审计。
+- **持久化**：每次变更原子写入（tmp+rename）`data/workspace.json`；导入/导出使用同一信封（`format: "forge.workspace", version: 1`）。
+- **审计**：追加式日志记录每一次重要状态变化（actor + from/to，上限 5000 条）。
+- **多语言界面**：英文 / 简体中文，侧边栏或设置中切换；偏好保存在 `localStorage`（首次访问自动检测浏览器语言）；全部界面文案、状态词、严重性、提示都经由单一字典（`public/js/i18n/messages.json`）与 `{param}` 插值本地化。
 
-## Security notes
+## 安全说明
 
-- Server makes **no outbound requests**; the only URL parsing is the request
-  target of the local HTTP server itself.
-- All JSON responses are serialized through one encoded channel
-  (`jsonio.encodeJson`: `< > & U+2028 U+2029` neutralized, OWASP JSON
-  hardening) with `X-Content-Type-Options: nosniff`; static serving is isolated
-  in its own module with path confinement.
-- Repo test execution runs in a `vm` sandbox without host globals; repo paths
-  are validated (`../`, absolute paths, weird chars rejected); request bodies
-  are size-capped and JSON-validated; every API error is a typed
-  `ForgeError` with a stable code.
+- 服务器**不发出任何出站请求**；唯一的 URL 解析就是本地 HTTP 服务器自身的请求目标。
+- 所有 JSON 响应经由单一编码通道（`jsonio.encodeJson`：中和 `< > & U+2028 U+2029`，OWASP JSON 加固）并带 `X-Content-Type-Options: nosniff`；静态服务独立模块并做路径禁闭。
+- 仓库测试在无宿主全局的 `vm` 沙箱中执行；仓库路径经过校验（拒绝 `../`、绝对路径等）；请求体有限流并做 JSON 校验；每个 API 错误都是带稳定错误码的类型化 `ForgeError`。
 
-## Known limitations
+## 已知限制
 
-- Single-user local workspace (API actor is always the local admin); no auth.
-- Sandbox test harness supports sync + promise-returning tests, flat
-  describe blocks; no beforeEach/afterEach hooks.
-- Multi-line empty-catch and more advanced lint/security rules are out of
-  scope; the security scanner is pattern-based (deterministic, no taint
-  analysis).
-- Merge resolution is per-file ours/theirs/manual content (no per-hunk
-  picking); rename/rename and directory-level conflicts are not modelled.
-- Audit log and messages are capped (5000 / 4000 entries) to bound memory;
-  older entries are dropped, not archived.
-- `autoScheduler` drains ready tasks sequentially; there is no per-agent
-  concurrency model.
-- The demo scenario is orchestrated through real APIs step by step, but the
-  step sequence itself is fixed (it is a demo, not an autonomous planner).
-- Server-side strings (API error messages, terminal command output, demo step
-  names) are English-only; the i18n layer covers the web UI. Language is a
-  client-side preference, not part of the persisted workspace state.
-- The desktop app is an app-mode browser window over the local server (no
-  Electron-style bundling), so it needs Node.js on PATH; it is Windows-only
-  (VBS launcher). A packaged single-exe build is out of scope.
+- 单用户本地工作台（API actor 固定为本地 admin），无认证体系。
+- 沙箱测试框架支持同步/promise 用例与扁平 describe，无 beforeEach/afterEach 钩子。
+- 安全扫描为确定性模式匹配（非污点分析）；lint 不覆盖多行空 catch 等复杂形态。
+- 冲突解决粒度为文件级（ours/theirs/手动全文），无逐 hunk 选择；rename/rename 冲突未建模。
+- 审计（5000 条）与消息（4000 条）有上限裁剪，不归档；自动调度器为顺序执行非并发模型。
+- 演示场景通过真实 API 逐步编排，但步骤序列本身是固定的（这是演示，不是自主 planner）。
+- 服务端字符串（API 错误消息、终端命令输出、演示步骤名）仅英文；i18n 层覆盖 Web 界面。语言是客户端偏好，不属于持久化的工作台状态。
+- 桌面应用是基于本地服务器的应用模式浏览器窗口（非 Electron 式打包），因此需要 PATH 上有 Node.js；仅支持 Windows（VBS 启动器）。单文件 exe 打包超出范围。
+- 外部编排器失败后需人工点重试（不自动重试，防止烧 token）；dsh/zcode 适配器未内置。
