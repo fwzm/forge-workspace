@@ -49,14 +49,30 @@ class AgentRegistry {
     return a;
   }
 
-  register({ name, type }) {
+  register({ name, type, backend }) {
     if (!AGENT_TYPES.includes(type)) {
       const e = new Error(`agent type must be one of [${AGENT_TYPES.join(', ')}]`);
       e.code = 'FORGE_INVALID_INPUT';
       throw e;
     }
+    if (backend !== undefined && backend !== null && typeof backend !== 'string') {
+      const e = new Error('agent backend must be a string adapter id or null');
+      e.code = 'FORGE_INVALID_INPUT';
+      throw e;
+    }
     const role = ROLE_BY_TYPE[type];
-    const agent = { id: id('agent'), name: name || `${type}-agent`, type, role, status: 'idle', createdAt: Date.now(), lastTaskAt: null, tasksDone: 0, tasksFailed: 0 };
+    const agent = {
+      id: id('agent'),
+      name: name || `${type}-agent`,
+      type,
+      role,
+      backend: backend || null, // external adapter id (codex/claude/...) or null = internal engine
+      status: 'idle',
+      createdAt: Date.now(),
+      lastTaskAt: null,
+      tasksDone: 0,
+      tasksFailed: 0,
+    };
     this.agents.push(agent);
     return agent;
   }

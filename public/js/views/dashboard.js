@@ -1,4 +1,4 @@
-import { h, clear, chip, fmtTime, fmtFull, t } from '../ui.js';
+import { h, clear, chip, fmtTime, fmtFull, toast, t } from '../ui.js';
 import { post } from '../api.js';
 import { act, confirmModal } from '../actions.js';
 
@@ -38,6 +38,9 @@ export function render(root, state) {
 
   // Demo control
   root.appendChild(buildDemoPanel(state));
+
+  // AI orchestration
+  root.appendChild(buildOrchestratePanel(state));
 
   // Issues
   const issuesPanel = h('div', { class: 'panel' }, h('h2', { style: 'margin-top:0' }, t('dash.issues')));
@@ -85,6 +88,39 @@ export function render(root, state) {
       h('td', { class: 'mono' }, e.action),
       h('td', { class: 'muted' }, e.target ? `${e.target.type}:${String(e.target.id).slice(0, 24)}` : '—'))))));
   root.appendChild(actPanel);
+}
+
+function buildOrchestratePanel(state) {
+  const panel = h('div', { class: 'panel' });
+  panel.appendChild(h('h2', { style: 'margin-top:0' }, t('dash.orchestrate')));
+  panel.appendChild(h('p', { class: 'muted', style: 'margin-top:2px' }, t('dash.orchestrateNote')));
+
+  const title = h('input', { type: 'text', name: 'orchestrate-title', maxlength: '200', style: 'flex: 2; min-width: 260px' });
+  title.setAttribute('placeholder', t('dash.orchTitlePh'));
+  const backend = h('select', { name: 'orchestrate-backend', 'aria-label': t('dash.orchBackend') },
+    h('option', { value: 'codex' }, 'codex'),
+    h('option', { value: 'claude' }, 'claude'));
+  const feedback = h('p', { class: 'muted', style: 'margin: 6px 0 0' });
+  panel.appendChild(h('form', {
+    class: 'row',
+    onsubmit: async (e) => {
+      e.preventDefault();
+      if (!title.value.trim()) return;
+      try {
+        const res = await post('/api/orchestrate', { title: title.value.trim(), backend: backend.value });
+        toast(t('dash.toastPipeline'), 'ok');
+        clear(feedback);
+        feedback.appendChild(document.createTextNode(t('dash.orchStarted', { branch: res.branch })));
+        title.value = '';
+      } catch (err) {
+        toast(`${err.code || 'ERROR'}: ${err.message}`, 'error');
+      }
+    },
+  }, title, h('span', { class: 'muted' }, `${t('dash.orchBackend')}:`), backend,
+  h('button', { class: 'primary', type: 'submit' }, t('dash.orchStart'))));
+  panel.appendChild(feedback);
+  if (state.ciRuns === undefined) { /* state shape guard for older snapshots */ }
+  return panel;
 }
 
 function buildDemoPanel(state) {

@@ -28,6 +28,7 @@ class Workspace {
     this.config = {
       name: 'FORGE Workspace',
       autoScheduler: false,          // when true, ready tasks are auto-assigned & executed
+      autoMergeExternal: false,      // human merge gate for external-agent pipelines (recommended: false)
       enforcePermissions: true,      // when false, all roles may act (audited)
       requiredChecks: ['lint', 'unit', 'integration', 'security', 'build'],
       securityThreshold: 'high',
@@ -113,12 +114,13 @@ class Workspace {
   updateConfig(actor, patch) {
     this.check(actor, 'workspace.write');
     assertObject(patch, 'config patch');
-    const allowed = ['name', 'autoScheduler', 'enforcePermissions', 'requiredChecks', 'securityThreshold', 'lintMaxLineLength'];
+    const allowed = ['name', 'autoScheduler', 'autoMergeExternal', 'enforcePermissions', 'requiredChecks', 'securityThreshold', 'lintMaxLineLength'];
     for (const key of Object.keys(patch)) {
       if (!allowed.includes(key)) throw invalidInput(`unknown config key: ${key}`, { key });
     }
     if (patch.name !== undefined) this.config.name = assertString(patch.name, 'name', { min: 1, max: 100 });
     if (patch.autoScheduler !== undefined) this.config.autoScheduler = Boolean(patch.autoScheduler);
+    if (patch.autoMergeExternal !== undefined) this.config.autoMergeExternal = Boolean(patch.autoMergeExternal);
     if (patch.enforcePermissions !== undefined) this.config.enforcePermissions = Boolean(patch.enforcePermissions);
     if (patch.requiredChecks !== undefined) {
       const checks = assertArray(patch.requiredChecks, 'requiredChecks', { min: 0, max: 5 });
@@ -226,10 +228,22 @@ class Workspace {
     if (task.assignee) {
       agent = this.agents.requireAgent(task.assignee);
     } else {
-      agent = this.agents.byType(task.type)[0];
+      const wantedBackend = task.spec && task.spec.backend ? task.spec.backend : null;
+      const pool = this.agents.byType(task.type);
+      agent = wantedBackend
+        ? pool.find((a) => a.backend === wantedBackend)
+        : pool.find((a) => !a.backend);
+      if (!agent && wantedBackend) {
+        // Lazily register a worker bound to this external backend.
+        const { getAdapter } = require('../orchestration/adapters');
+        const adapter = getAdapter(wantedBackend);
+        if (!adapter) throw new ForgeError(CODES.STATE, `no adapter registered for backend "${wantedBackend}"`);
+        agent = this.agents.register({ name: `${wantedBackend}-${task.type}`, type: task.type, backend: wantedBackend });
+        this.audit.append({ type: 'system', id: 'orchestrator', role: 'system' }, 'agent.registered', { type: 'agent', id: agent.id }, { backend: wantedBackend, type: task.type, auto: true });
+      }
       if (!agent) throw new ForgeError(CODES.STATE, `no registered agent of type "${task.type}" to run task ${taskId}`);
       this.tasks.assign(taskId, agent.id);
-      this.audit.append(actor, 'task.assigned', { type: 'task', id: taskId }, { assignee: agent.id, auto: true });
+      this.audit.append(actor, 'task.assigned', { type: 'task', id: taskId }, { assignee: agent.id, auto: true, backend: agent.backend || null });
     }
     if (task.status === 'paused') {
       this.tasks.resume(taskId);
@@ -243,15 +257,26 @@ class Workspace {
   }
 
   async _execute(agent, task) {
-    const runner = runners[agent.type];
-    if (!runner) throw new ForgeError(CODES.STATE, `no runner registered for agent type "${agent.type}"`);
-    this.agents.mark(agent.id, 'working');
-    const startMsg = postMessage(this.messages, {
+    const startMsgCommon = {
       agentId: agent.id, taskId: task.id, status: 'running',
       input: task.spec, output: null, artifacts: [], dependencies: [...task.dependencies],
-    });
+    };
+    const runner = agent.backend ? null : runners[agent.type];
+    if (!agent.backend && !runner) throw new ForgeError(CODES.STATE, `no runner registered for agent type "${agent.type}"`);
+    this.agents.mark(agent.id, 'working');
+    postMessage(this.messages, startMsgCommon);
     try {
-      const res = await runner(this, agent, task);
+      let res;
+      if (agent.backend) {
+        // External agent: patch-mode orchestration (isolated snapshot dir).
+        const orch = require('../orchestration/orchestrator');
+        res = agent.type === 'review'
+          ? await orch.externalReview(this, agent, task)
+          : await orch.externalImplement(this, agent, task);
+        this._externalFailureStreak = 0;
+      } else {
+        res = await runner(this, agent, task);
+      }
       const current = this.tasks.get(task.id);
       if (current.status === 'running' || current.status === 'paused') {
         this.tasks.complete(task.id, res ? res.output : null);
@@ -276,6 +301,17 @@ class Workspace {
       }
       this.agents.mark(agent.id, 'idle');
       this.agents.get(agent.id).tasksFailed += 1;
+      if (agent.backend) {
+        // Circuit breaker: three consecutive external failures pause the
+        // auto-scheduler so a broken agent cannot loop forever.
+        this._externalFailureStreak = (this._externalFailureStreak || 0) + 1;
+        if (this._externalFailureStreak >= 3 && this.config.autoScheduler) {
+          this.config.autoScheduler = false;
+          this.audit.append({ type: 'system', id: 'orchestrator', role: 'system' }, 'orchestrator.circuit_breaker', null, {
+            streak: this._externalFailureStreak, backend: agent.backend, action: 'autoScheduler disabled',
+          });
+        }
+      }
       const failed = this.tasks.get(task.id);
       postMessage(this.messages, {
         agentId: agent.id, taskId: task.id, status: failed.status,
@@ -595,11 +631,13 @@ class Workspace {
     this.config = {
       name: 'FORGE Workspace',
       autoScheduler: false,
+      autoMergeExternal: false,
       enforcePermissions: true,
       requiredChecks: ['lint', 'unit', 'integration', 'security', 'build'],
       securityThreshold: 'high',
       lintMaxLineLength: 140,
     };
+    this._externalFailureStreak = 0;
     this.agents = new AgentRegistry();
     this.tasks = new TaskGraph();
     this.repo = new Repository('demo-app');
@@ -616,6 +654,55 @@ class Workspace {
     this.audit.append(actor, 'workspace.reset', { type: 'workspace', id: this.config.name }, { seeded: Boolean(seed) });
     this._save();
     return this.viewState();
+  }
+
+  // -- external orchestration ---------------------------------------------------
+  // Probe every registered external adapter (codex/claude/...): is the CLI
+  // installed and callable? Read-only, safe to call from the UI at any time.
+  async probeExternalAgents(actor) {
+    this.check(actor, 'workspace.write');
+    const { listAdapters } = require('../orchestration/adapters');
+    const out = [];
+    for (const adapter of listAdapters()) {
+      if (adapter.kind !== 'real') continue;
+      try {
+        const probe = await adapter.probe();
+        out.push({ id: adapter.id, label: adapter.label, ok: probe.ok, version: probe.version || null, reason: probe.reason || null });
+      } catch (e) {
+        out.push({ id: adapter.id, label: adapter.label, ok: false, version: null, reason: e.message });
+      }
+    }
+    this.audit.append(actor, 'orchestrator.probe', { type: 'workspace', id: this.config.name }, out.map((x) => `${x.id}:${x.ok ? 'ok' : 'missing'}`));
+    this._save();
+    return out;
+  }
+
+  // One-shot automated pipeline: report an issue, build the DAG (external
+  // implementer + reviewer, internal QA/security), and enable the scheduler.
+  // The run parks at the human merge gate unless autoMergeExternal is on.
+  orchestrateIssue(actor, { title, description, backend, reviewBackend, instructions }) {
+    this.check(actor, 'issue.create');
+    const { buildIssuePipeline } = require('../orchestration/orchestrator');
+    const issue = this.createIssue(actor, { title, body: description || '', labels: ['orchestrated'] });
+    const pipeline = buildIssuePipeline(this, actor, {
+      issueId: issue.id,
+      backend,
+      reviewBackend,
+      instructions,
+    });
+    this.config.autoScheduler = true;
+    this.audit.append(actor, 'orchestrator.pipeline_started', { type: 'issue', id: issue.id }, {
+      backend, branch: pipeline.branch, autoMerge: this.config.autoMergeExternal,
+    });
+    this._save();
+    this._maybeDrain();
+    return {
+      issueId: issue.id,
+      backend,
+      branch: pipeline.branch,
+      tasks: Object.fromEntries(Object.entries(pipeline.tasks).map(([k, t]) => [k, t.id])),
+      mergeGate: this.config.autoMergeExternal ? 'auto' : 'human',
+    };
   }
 
   // -- demo ------------------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { h, clear, t } from '../ui.js';
+import { h, clear, chip, toast, t } from '../ui.js';
 import { get, post, put } from '../api.js';
 import { act, confirmModal } from '../actions.js';
 import { LANGS, getLang, setLang } from '../i18n.js';
@@ -10,6 +10,7 @@ export function render(root, state) {
 
   buildLanguage(root);
   buildConfig(root, state);
+  buildExternal(root, state);
   buildPermissions(root, state);
   buildDataOps(root, state);
 }
@@ -35,6 +36,7 @@ function buildConfig(root, state) {
   const maxLen = h('input', { type: 'number', name: 'lint-max-line-length', min: '40', max: '1000', style: 'width: 110px', value: String(cfg.lintMaxLineLength) });
   const threshold = h('select', { name: 'security-threshold' }, ...['critical', 'high', 'medium', 'low'].map((th) => h('option', { value: th, selected: th === cfg.securityThreshold }, th)));
   const auto = h('input', { type: 'checkbox', name: 'auto-scheduler', checked: cfg.autoScheduler });
+  const autoMerge = h('input', { type: 'checkbox', name: 'auto-merge-external', checked: cfg.autoMergeExternal });
   const enforce = h('input', { type: 'checkbox', name: 'enforce-permissions', checked: cfg.enforcePermissions });
   const checks = h('div', { class: 'pill-row' });
   for (const c of ['lint', 'unit', 'integration', 'security', 'build']) {
@@ -50,6 +52,7 @@ function buildConfig(root, state) {
         lintMaxLineLength: Number(maxLen.value),
         securityThreshold: threshold.value,
         autoScheduler: auto.checked,
+        autoMergeExternal: autoMerge.checked,
         enforcePermissions: enforce.checked,
         requiredChecks,
       }), t('settings.toastSaved'));
@@ -59,9 +62,37 @@ function buildConfig(root, state) {
   h('label', null, t('settings.lintLen')), maxLen,
   h('label', null, t('settings.secThreshold')), threshold,
   h('label', { class: 'row', style: 'margin-top: 10px; gap: 6px; color: var(--text); font-size: 13px' }, auto, t('settings.autoSched')),
+  h('label', { class: 'row', style: 'gap: 6px; color: var(--text); font-size: 13px' }, autoMerge, t('settings.autoMergeLabel')),
   h('label', { class: 'row', style: 'gap: 6px; color: var(--text); font-size: 13px' }, enforce, t('settings.enforce')),
   h('label', { style: 'margin-top: 10px' }, t('settings.requiredChecks')), checks,
   h('div', { class: 'row mt' }, h('button', { class: 'primary', type: 'submit' }, t('settings.save')))));
+  root.appendChild(panel);
+}
+
+function buildExternal(root, state) {
+  const panel = h('div', { class: 'panel' }, h('h2', { style: 'margin-top: 0' }, t('settings.external')));
+  panel.appendChild(h('p', { class: 'muted' }, t('settings.externalNote')));
+  const out = h('div', { class: 'mt' });
+  out.appendChild(h('p', { class: 'muted' }, 'codex · claude'));
+  panel.appendChild(h('div', { class: 'row' },
+    h('button', {
+      onclick: async () => {
+        while (out.firstChild) out.removeChild(out.firstChild);
+        try {
+          const probes = await get('/api/external/probe');
+          for (const p of probes) {
+            out.appendChild(h('div', { class: 'row', style: 'margin: 4px 0' },
+              h('strong', { class: 'mono', style: 'min-width: 90px' }, p.id),
+              chip(p.ok ? 'success' : 'failure'),
+              h('span', { class: 'muted' }, p.ok ? (p.version || 'installed') : (p.reason || 'not found'))));
+          }
+          toast(t('dash.toastProbe'), 'ok');
+        } catch (e) {
+          out.appendChild(h('p', { style: 'color: var(--red)' }, e.message));
+        }
+      },
+    }, t('settings.probe'))));
+  panel.appendChild(out);
   root.appendChild(panel);
 }
 

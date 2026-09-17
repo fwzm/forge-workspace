@@ -3,7 +3,38 @@
 A local, zero-dependency multi-agent software engineering workbench simulator.
 Node.js backend + vanilla HTML/CSS/JS frontend (no frameworks, no npm packages).
 Runs as a **Windows desktop app** (Edge/Chrome app-mode window) or a plain
-local web server.
+local web server — and can **orchestrate real agent CLIs** (Codex, Claude Code)
+in fully automated pipelines with a human merge gate.
+
+## Real-agent orchestration (patch mode)
+
+The orchestrator drives your installed agent CLIs through the same task DAG
+the simulated agents use:
+
+```
+issue ─▶ external implementer (codex/claude) ─▶ internal QA + security engines
+      ─▶ external reviewer ─▶ CI (lint/unit/integration/security/build)
+      ─▶ PR (approved + green) ─▶ ⏸ human merge gate (default) or auto-merge
+```
+
+Safety model:
+
+- **Patch mode** — the agent never touches your real files or the virtual
+  repository directly. Its whole workspace is exported to an isolated temp
+  directory (`%TEMP%\forge-<agent>-…`); FORGE diffs the result back and
+  applies only that changeset, then runs the CI engines as the arbiter.
+- **Human merge gate** — pipelines park at "PR approved + CI green" until you
+  click Merge (enable `autoMergeExternal` in Settings to skip; not
+  recommended).
+- **Circuit breaker** — three consecutive external failures disable the
+  auto-scheduler and write an audit entry instead of looping forever.
+- Empty agent output fails the task (no silent no-ops), and every step lands
+  in the audit log.
+
+Adapters ship for **Codex CLI** (`codex exec`, stdin prompt) and
+**Claude Code** (`claude -p --permission-mode acceptEdits`, stdin prompt);
+both are probed via Settings → *External agents*. Adding another CLI is one
+object in `server/orchestration/adapters.js`.
 
 ## Run — Windows desktop app
 
@@ -34,12 +65,17 @@ scan → fix → reviewer request-changes → fix → CI green → approve → m
 npm test                      # or: node test/run-all.js
 ```
 
-259 automated tests (see `test-report.json` after a run): state machine, task DAG,
+273 automated tests (see `test-report.json` after a run): state machine, task DAG,
 scheduler, repository, diff, 3-way merge, PR gate, CI pipeline, permissions,
 audit, persistence, terminal, demo scenario, HTTP API, i18n dictionary
 integrity (en/zh-CN key parity, placeholder parity, orphan/reference scan),
 and the Windows desktop launcher (port picking, launch-info handshake, icon
-format, launcher-script wiring, headless boot).
+format, launcher-script wiring, headless boot). The orchestration suite runs
+the full pipeline against injectable fake adapters — implement → gates →
+review → CI → human/auto merge, request-changes gating, the circuit breaker,
+empty-output rejection and sandbox path-confinement — so the orchestration
+logic is verified without spending tokens; real-CLI runs are smoke-tested
+separately.
 
 ## Architecture
 

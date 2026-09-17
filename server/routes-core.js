@@ -38,6 +38,10 @@ function registerCoreRoutes(route, ws, computeMetrics) {
   route('GET', '/api/issues', (ctx) => sendJson(ctx.res, 200, { ok: true, data: ws.issues }));
   route('POST', '/api/issues', (ctx) => sendJson(ctx.res, 200, { ok: true, data: ws.createIssue(ctx.actor, ctx.body) }));
   route('POST', '/api/issues/:id/state', (ctx) => sendJson(ctx.res, 200, { ok: true, data: ws.updateIssueState(ctx.actor, ctx.params.id, ctx.body.state) }));
+
+  // External agent orchestration
+  route('GET', '/api/external/probe', async (ctx) => sendJson(ctx.res, 200, { ok: true, data: await ws.probeExternalAgents(ctx.actor) }));
+  route('POST', '/api/orchestrate', (ctx) => sendJson(ctx.res, 200, { ok: true, data: ws.orchestrateIssue(ctx.actor, ctx.body || {}) }));
 }
 
 module.exports = { registerCoreRoutes };

@@ -29,6 +29,7 @@ use('./demo.test.js');
 use('./api.test.js');
 use('./i18n.test.js');
 use('./desktop.test.js');
+use('./orchestration.test.js');
 
 (async () => {
   const results = [];
