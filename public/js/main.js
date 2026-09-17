@@ -14,18 +14,68 @@ import { render as prs } from './views/prs.js';
 import { render as settings } from './views/settings.js';
 
 const VIEWS = [
-  { id: 'dashboard', num: '1', labelKey: 'nav.dashboard', render },
-  { id: 'kanban', num: '2', labelKey: 'nav.kanban', render: kanban },
-  { id: 'graph', num: '3', labelKey: 'nav.graph', render: graphview },
-  { id: 'prs', num: '4', labelKey: 'nav.prs', render: prs },
-  { id: 'files', num: '5', labelKey: 'nav.files', render: files },
-  { id: 'diff', num: '6', labelKey: 'nav.diff', render: diffview },
-  { id: 'tests', num: '7', labelKey: 'nav.tests', render: tests },
-  { id: 'logs', num: '8', labelKey: 'nav.logs', render: logs },
-  { id: 'terminal', num: '9', labelKey: 'nav.terminal', render: terminal },
-  { id: 'metrics', num: '0', labelKey: 'nav.metrics', render: metrics },
-  { id: 'settings', num: 'g s', labelKey: 'nav.settings', render: settings },
+  { id: 'dashboard', num: '1', labelKey: 'nav.dashboard', render: dashboard, sig: sigDashboard },
+  { id: 'kanban', num: '2', labelKey: 'nav.kanban', render: kanban, sig: sigTasks },
+  { id: 'graph', num: '3', labelKey: 'nav.graph', render: graphview, sig: sigTasks },
+  { id: 'prs', num: '4', labelKey: 'nav.prs', render: prs, sig: sigPrs },
+  { id: 'files', num: '5', labelKey: 'nav.files', render: files, sig: sigFiles },
+  { id: 'diff', num: '6', labelKey: 'nav.diff', render: diffview, sig: sigRefs },
+  { id: 'tests', num: '7', labelKey: 'nav.tests', render: tests, sig: sigRuns },
+  { id: 'logs', num: '8', labelKey: 'nav.logs', render: logs, sig: sigLogs },
+  { id: 'terminal', num: '9', labelKey: 'nav.terminal', render: terminal, sig: (s, lang) => lang + '|' + s.name },
+  { id: 'metrics', num: '0', labelKey: 'nav.metrics', render: metrics, sig: (s, lang) => lang },
+  { id: 'settings', num: 'g s', labelKey: 'nav.settings', render: settings, sig: (s, lang) => lang + '|' + JSON.stringify(s.config) },
 ];
+
+// Cheap per-view fingerprints: when a poll produces state that a view does
+// not display, skip that view's re-render entirely (heavy tables/SVGs stay
+// put instead of being rebuilt every 1.5s).
+function sigTasks(state, lang) {
+  return lang + '|' + state.tasks.map((t) => `${t.id}:${t.status}:${t.assignee}:${t.attempts}:${t.dependencies.length}:${t.updatedAt}:${t.lastError ? 1 : 0}`).join(',');
+}
+
+function sigDashboard(state, lang) {
+  return [
+    lang,
+    state.tasks.map((t) => t.status).join(','),
+    state.agents.map((a) => `${a.tasksDone}/${a.tasksFailed}`).join(','),
+    state.repo.commits,
+    state.prs.filter((p) => p.state === 'merged').length,
+    state.ciRuns.filter((r) => r.status === 'success').length,
+    state.issues.length,
+    state.audit.length,
+    state.demo ? `${state.demo.stepIndex}:${state.demo.steps.map((s) => s.status).join('')}` : '-',
+  ].join('|');
+}
+
+function sigPrs(state, lang) {
+  return lang + '|' + JSON.stringify([
+    state.prs.map((p) => [p.id, p.state, p.reviews.length, p.headSha, p.mergeCommit]),
+    state.ciRuns.map((r) => [r.id, r.status]),
+    state.repo.branches.map((b) => b.name),
+  ]);
+}
+
+function sigFiles(state, lang) {
+  const st = state.repo.status;
+  return lang + '|' + [state.repo.head.branch, state.repo.head.commit, st.modified.join(','), st.added.join(','), st.deleted.join(','), state.repo.branches.length, state.repo.files.length, state.repo.log.length].join('|');
+}
+
+function sigRefs(state, lang) {
+  return lang + '|' + state.repo.branches.map((b) => b.name).join(',') + '|' + (state.repo.log[0] ? state.repo.log[0].hash : '');
+}
+
+function sigRuns(state, lang) {
+  return lang + '|' + JSON.stringify([
+    state.ciRuns.map((r) => [r.id, r.status, r.stages.map((s) => s.status).join('')]),
+    state.messages.length,
+  ]);
+}
+
+function sigLogs(state, lang) {
+  const last = state.audit[state.audit.length - 1];
+  return lang + '|' + [state.audit.length, last ? last.seq : 0, state.messages.length].join('|');
+}
 
 function currentView() {
   const hash = location.hash.replace(/^#\//, '') || 'dashboard';
@@ -62,30 +112,48 @@ function applyStaticLabels() {
 function buildLangSwitch() {
   const foot = document.querySelector('.sidebar-foot');
   if (!foot) return;
-  const existing = foot.querySelector('select');
+  // Idempotent: one wrapper, rebuilt in place — never accumulate on re-render.
+  const existing = document.getElementById('lang-quick-wrap');
   if (existing) existing.remove();
   const sel = h('select', { name: 'lang-quick', 'aria-label': t('foot.language'), style: 'margin-bottom: 6px' });
   for (const l of LANGS) {
     sel.appendChild(h('option', { value: l.code, selected: l.code === getLang() }, l.label));
   }
   sel.addEventListener('change', () => setLang(sel.value));
-  const wrap = h('div', null, h('div', { class: 'muted', style: 'margin-bottom: 2px' }, t('foot.language')), sel);
+  const wrap = h('div', { id: 'lang-quick-wrap' }, h('div', { class: 'muted', style: 'margin-bottom: 2px' }, t('foot.language')), sel);
   foot.insertBefore(wrap, foot.firstChild);
 }
 
-function render() {
+// View dispatch with per-view signature skipping. Manual navigations
+// (hashchange / language change) always render; poll-driven renders only
+// when the active view's fingerprint actually changed.
+let lastSig = null;
+
+function currentSig() {
   const view = currentView();
+  return view.sig ? view.sig(getState(), getLang()) : null;
+}
+
+function render() {
   renderNav();
   applyStaticLabels();
   buildLangSwitch();
+  const state = getState();
+  if (!state) {
+    // Boot has not fetched state yet; nav chrome is painted, the view body
+    // arrives with the first refresh().
+    return;
+  }
+  const view = currentView();
   const root = clear(document.getElementById('view'));
   try {
-    view.render(root, getState());
+    view.render(root, state);
   } catch (e) {
     root.appendChild(h('div', { class: 'panel' },
       h('h2', null, 'View failed to render'),
       h('pre', null, String(e && e.stack || e))));
   }
+  lastSig = currentSig();
   document.title = `FORGE — ${t(view.labelKey)}`;
 }
 
@@ -127,17 +195,19 @@ window.addEventListener('unhandledrejection', (e) => {
   toast(`Unhandled rejection: ${msg}`, 'error');
 });
 
-subscribe(render);
-onLangChange(render);
-window.addEventListener('hashchange', render);
-i18nInit().then(() => {
+subscribe((s) => {
+  const view = currentView();
+  if (!s) return;
+  const sig = view.sig ? view.sig(s, getLang()) : null;
+  if (sig !== null && sig === lastSig) return; // nothing this view displays changed
   render();
-  return refresh();
-}).then(() => {
+});
+onLangChange(render);
+window.addEventListener('hashchange', () => { lastSig = null; render(); });
+i18nInit().then(() => refresh()).then(() => {
   render();
   startPolling(1500);
 }).catch((e) => {
   console.error('boot failed', e);
   render();
 });
-render();

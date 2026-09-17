@@ -16,7 +16,15 @@ export function subscribe(fn) {
   return () => subs.delete(fn);
 }
 
-function notify() {
+// Coalesced notification: at most one subscriber pass per animation frame,
+// and never more often than MIN_NOTIFY_GAP ms. During agent runs state
+// changes constantly; without coalescing every change would rebuild the
+// active view and make navigation feel sluggish.
+const MIN_NOTIFY_GAP = 700;
+let lastNotify = 0;
+let trailingTimer = null;
+
+function doNotify() {
   for (const fn of subs) {
     try {
       fn(state);
@@ -24,6 +32,27 @@ function notify() {
       console.error('subscriber error', e);
     }
   }
+}
+
+function notify() {
+  const now = Date.now();
+  const gap = now - lastNotify;
+  if (gap >= MIN_NOTIFY_GAP) {
+    lastNotify = now;
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => doNotify());
+    } else {
+      doNotify();
+    }
+    return;
+  }
+  if (trailingTimer) return;
+  trailingTimer = setTimeout(() => {
+    trailingTimer = null;
+    lastNotify = Date.now();
+    doNotify();
+  }, MIN_NOTIFY_GAP - gap);
+  if (trailingTimer.unref) trailingTimer.unref();
 }
 
 function setConn(ok) {
