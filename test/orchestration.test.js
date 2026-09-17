@@ -144,6 +144,9 @@ test('orchestration: full pipeline with fake agents reaches the human merge gate
   registerFakeAdapter('fakeimpl', fakeImplementer);
   registerFakeAdapter('fakereview', fakeApprover);
   const ws = makeSeededWs();
+  // Only dirs created by THIS run count: pre-existing pollution (e.g. from a
+  // killed earlier run) must not fail the cleanup assertion.
+  const dirsBefore = new Set(fs.readdirSync(os.tmpdir()));
   const summary = ws.orchestrateIssue(ADMIN, {
     title: 'Add a shout() helper to stringUtils',
     description: 'needs an upper-case helper',
@@ -194,8 +197,10 @@ test('orchestration: full pipeline with fake agents reaches the human merge gate
   const actions = ws.audit.filter({ action: 'orchestrator.' }).map((e) => e.action);
   includes(actions.join(','), 'orchestrator.pipeline_started');
 
-  // The sandbox temp dirs are gone
-  const leftovers = fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('forge-fakeimpl-') || d.startsWith('forge-review-'));
+  // The sandbox temp dirs are gone (only dirs created by this run).
+  const leftovers = fs.readdirSync(os.tmpdir())
+    .filter((d) => !dirsBefore.has(d))
+    .filter((d) => d.startsWith('forge-fakeimpl-') || d.startsWith('forge-review-'));
   equal(leftovers.length, 0, `leftover temp dirs: ${leftovers.join(',')}`);
 });
 
