@@ -1,0 +1,12 @@
+# runtime state and logs
+data/workspace.json
+server.log
+forge.log
+*.log
+
+# generated reports
+test-report.json
+
+# OS cruft
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,16 @@
+{
+  "name": "forge-workspace",
+  "version": "1.0.0",
+  "description": "FORGE — Autonomous Software Engineering Workspace (multi-agent workbench simulator, zero-dependency)",
+  "private": true,
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node test/run-all.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
